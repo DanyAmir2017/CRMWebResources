@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Eligible Products</title>
+<style>
+  body{font-family:Segoe UI,Arial,Helvetica,sans-serif;padding:12px;background:#f6f7fb;color:#1f2937}
+  #header{display:flex;justify-content:space-between;align-items:center}
+  #cards{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
+  .card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 2px 6px rgba(16,24,40,0.06);width:320px;display:flex;flex-direction:column}
+  .title{font-weight:600;margin-bottom:6px}
+  .meta{font-size:13px;color:#6b7280;margin-bottom:8px}
+  .actions{margin-top:auto;display:flex;gap:8px}
+  .btn{padding:6px 10px;border-radius:6px;border:none;cursor:pointer;font-weight:600}
+  .btn-apply{background:#0b5ed7;color:#fff}
+  .btn-refresh{background:#e6edf8;color:#0b5ed7}
+  .status-dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:8px}
+  .status-eligible{background:#059669}
+  .status-not{background:#ef4444}
+  .empty{color:#6b7280;padding:20px;text-align:center}
+</style>
+</head>
+<body>
+  <div id="header">
+    <h3 style="margin:0">Eligible Products</h3>
+    <div>
+      <button class="btn btn-refresh" id="refreshBtn">Refresh</button>
+    </div>
+  </div>
+
+  <div id="cards" role="list"></div>
+  <div id="footer" style="margin-top:12px"></div>
+
+<script>
+(function(){
+  // -------- CONFIG --------
+  var PRODUCT_MAP = {
+    "312090000": { label: "Loan", icon: "💸", desc: "Loan offering" },
+    "312090001": { label: "Credit Card", icon: "💳", desc: "Credit card offering" },
+    "312090002": { label: "Bank Account", icon: "🏦", desc: "Bank account offering" }
+  };
+
+  var PRODUCT_ENTITY_MAP = {
+    "312090000": "aaib_loan",
+    "312090001": "aaib_creditcard",
+    "312090002": "aaib_bankaccount"
+  };
+
+  var APPLIED_STATUS = 312090002; // <-- Replace with actual choice value for "Applied"
+
+  // -------- DOM + Helpers --------
+  var container = document.getElementById("cards");
+  document.getElementById("refreshBtn").addEventListener("click", load);
+
+  function getXrm() {
+    try { return window.parent.Xrm || window.parent.parent.Xrm || window.top.Xrm; } catch(e) { return null; }
+  }
+
+  function getContactId() {
+    var xrm = getXrm();
+    if(!xrm) return null;
+    var id = null;
+    try { if (xrm.Page && xrm.Page.data && xrm.Page.data.entity) id = xrm.Page.data.entity.getId(); }
+    catch(e) { id = null; }
+    return id ? id.replace(/[{}]/g, "") : null;
+  }
+
+  function showEmpty(msg) { container.innerHTML = '<div class="empty">'+msg+'</div>'; }
+
+  // -------- Load + Render --------
+  async function load(){
+    container.innerHTML = '<div class="empty">Loading...</div>';
+    var xrm = getXrm();
+    var contactId = getContactId();
+    if(!contactId) { showEmpty("No contact context detected."); return; }
+
+    var query = "?$select=aaib_customerproducteligibilityid,aaib_name,aaib_producttype,aaib_eligibilitystatus,_aaib_contact_value&$filter=_aaib_contact_value eq " + contactId;
+    try {
+      var results = await xrm.WebApi.retrieveMultipleRecords("aaib_customerproducteligibility", query);
+      if(!results || !results.entities || results.entities.length===0) { showEmpty("No eligible products found."); return; }
+      render(results.entities);
+    } catch(err) {
+      showEmpty("Error loading eligibilities. See console.");
+      console.error(err);
+    }
+  }
+
+  function render(items) {
+    container.innerHTML = "";
+    items.forEach(function(item){
+      var pType = String(item.aaib_producttype || "");
+      var prod = PRODUCT_MAP[pType] || { label: "Product", icon: "📦", desc: "" };
+      var statusLabel = (item.aaib_eligibilitystatus === null || item.aaib_eligibilitystatus === undefined)
+          ? "Eligible"
+          : (item.aaib_eligibilitystatus === APPLIED_STATUS ? "Applied" : (item.aaib_eligibilitystatus === 312090000 ? "Eligible" : "Not Eligible"));
+      var statusClass = (item.aaib_eligibilitystatus === APPLIED_STATUS)
+          ? "status-eligible"
+          : ((item.aaib_eligibilitystatus === 312090000) ? "status-eligible" : "status-not");
+
+      var card = document.createElement("div"); card.className = "card";
+      var title = document.createElement("div"); title.className = "title"; title.innerHTML = prod.icon + " " + (item.aaib_name || prod.label);
+      var meta = document.createElement("div"); meta.className = "meta"; meta.textContent = prod.desc;
+      var statusLine = document.createElement("div"); statusLine.innerHTML = '<span class="status-dot '+statusClass+'"></span>' + statusLabel;
+
+      var actions = document.createElement("div"); actions.className = "actions";
+      var applyBtn = document.createElement("button"); applyBtn.className = "btn btn-apply"; applyBtn.textContent = "Apply";
+
+      if (item.aaib_eligibilitystatus === APPLIED_STATUS) {
+        applyBtn.disabled = true;
+        applyBtn.textContent = "Applied";
+        applyBtn.style.opacity = 0.6;
+      } else {
+        applyBtn.onclick = function(){ applyProduct(item); };
+      }
+
+      actions.appendChild(applyBtn);
+
+      card.appendChild(title);
+      card.appendChild(meta);
+      card.appendChild(statusLine);
+      card.appendChild(actions);
+      container.appendChild(card);
+    });
+  }
+
+  // -------- Apply logic --------
+  async function applyProduct(cpeItem) {
+    var xrm = getXrm();
+    var contactId = getContactId();
+    if (!xrm || !contactId) { alert('Unable to get CRM context.'); return; }
+
+    if (!confirm("Apply for " + (cpeItem.aaib_name || "product") + "?")) return;
+
+    var productTypeKey = String(cpeItem.aaib_producttype || "");
+    var entityName = PRODUCT_ENTITY_MAP[productTypeKey];
+    if (!entityName) { alert('Unknown product type, cannot apply.'); return; }
+
+    // Retrieve contact name
+    var customerName = "Customer";
+    try {
+      var contact = await xrm.WebApi.retrieveRecord("contact", contactId, "?$select=firstname,lastname,fullname");
+      customerName = ((contact.firstname || "") + " " + (contact.lastname || "")).trim() || contact.fullname || "Customer";
+    } catch (e) {
+      console.warn("Could not retrieve contact name:", e);
+    }
+
+    var productLabel = (PRODUCT_MAP[productTypeKey] && PRODUCT_MAP[productTypeKey].label) ? PRODUCT_MAP[productTypeKey].label : "Product";
+    var primaryName = productLabel + " Application - " + customerName;
+    if (cpeItem.aaib_name && cpeItem.aaib_name.indexOf(customerName) === -1) {
+      primaryName = productLabel + " Application - " + (cpeItem.aaib_name || customerName);
+    }
+
+    // Build product record
+    var productRecord = {};
+    productRecord["aaib_Contact@odata.bind"] = "/contacts(" + contactId + ")";
+    if (cpeItem.aaib_customerproducteligibilityid) {
+      productRecord["aaib_CPE@odata.bind"] = "/aaib_customerproducteligibilities(" + cpeItem.aaib_customerproducteligibilityid + ")";
+    }
+
+    // Map correct field by numeric productTypeKey
+    switch (productTypeKey) {
+      case "312090000": // Loan
+        productRecord["aaib_loanname"] = primaryName;
+        break;
+      case "312090001": // Credit Card
+        productRecord["aaib_cardname"] = primaryName;
+        break;
+      case "312090002": // Bank Account
+        productRecord["aaib_accountname"] = primaryName;
+        break;
+    }
+
+    try {
+      var created = await xrm.WebApi.createRecord(entityName, productRecord);
+      alert("Created " + entityName + " (ID: " + created.id + ")");
+
+      // Update CPE status
+      var cpeId = cpeItem.aaib_customerproducteligibilityid;
+      if (cpeId) {
+        var updateObj = { "aaib_eligibilitystatus": APPLIED_STATUS };
+        try {
+          await xrm.WebApi.updateRecord("aaib_customerproducteligibility", cpeId, updateObj);
+        } catch (uerr) {
+          console.error("Failed to update CPE status:", uerr);
+        }
+      }
+
+      // Refresh
+      await load();
+
+    } catch (err) {
+      console.error('Error creating product record:', err);
+      alert('Failed to create product record. See console for details.');
+    }
+  }
+
+  // Initial load
+  load();
+})();
+</script>
+</body>
+</html>
